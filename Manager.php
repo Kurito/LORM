@@ -4,14 +4,14 @@
     /**
      * This class handles the database access
      * 
-     * @author Christian Beelte <christian.beelte@itmo1701.de>
+     * @author Christian Beelte <beeltec@gmail.com>
      * @since 1.0.0 (11.03.2017)
      * @version 1.0.2 (16.03.2017)
      */
     class Manager extends \mysqli
     {
         /**
-         * @var \Beeltec\ORM\Entity\EntityInterface[] $entities
+         * @var \Beeltec\ORM\Entity[] $entities
          */
         private $entities;
 
@@ -38,7 +38,7 @@
         }
 
         /**
-         * This function adds a 'delete'-flag to the given object and persist it
+         * This function adds a 'delete'-flag to the given object and persists it
          * 
          * @since 1.0.2 (16.03.2017)
          * @param \Beeltec\ORM\Entity $entity
