@@ -1,7 +1,7 @@
 <?php
     namespace Beeltec\ORM;
 
-    class Entity
+    abstract class Entity
     {
         /**
          * Determines if the entity is going to be deleted on next flush

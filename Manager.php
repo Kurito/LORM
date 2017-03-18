@@ -4,7 +4,7 @@
     /**
      * This class handles the database access
      * 
-     * @author Christian Beelte <beeltec@gmail.com>
+     * @author Christian Beelte <christian.beelte@itmo1701.de>
      * @since 1.0.0 (11.03.2017)
      * @version 1.0.2 (16.03.2017)
      */
@@ -22,7 +22,6 @@
          * @param string $user The database username
          * @param string $pass The password of the user
          * @param string $db The name of the database
-         * @return void
          */
         public function __construct(string $host, string $user, string $pass, string $db)
         {
@@ -31,14 +30,14 @@
 
             // Check for errors during connection
             if (mysqli_connect_error())
-                die('Connect Error(' . mysqli_connect_errno() . ') ' . mysqli_connect_error());
+                die('Connect Error (' . mysqli_connect_errno() . ') ' . mysqli_connect_error());
 
             // Initialize managed object list
             $this->entities = array();
         }
 
         /**
-         * This function adds a 'delete'-flag to the given object and persists it
+         * This function adds a 'delete'-flag to the given object and persist it
          * 
          * @since 1.0.2 (16.03.2017)
          * @param \Beeltec\ORM\Entity $entity
@@ -62,7 +61,7 @@
         {
             // Check if the entity is already part of the managed object list
             $do_add = true;
-            if (isset($this->entites)) 
+            if (isset($this->entities)) 
             {
                 foreach ($this->entities as $managed_entity)
                 {
@@ -153,10 +152,13 @@
                 }
 
                 // holds the type string
-                $bind_type_string = "";
+                $param_type_string = "";
 
                 // holds all the entity's field values
-                $bind_param_values = null;
+                $param_values = null;
+
+                // holds references to the bind params
+                $param_references = null;
 
                 // iterate through all of the entity's fields
                 for ($i = 0; $i < sizeof($entity_fields); $i++) {
@@ -173,11 +175,11 @@
                     // create a bind type string based on the return value's type
                     switch ($fieldType) {
                         case "integer":
-                            $bind_type_string .= "i";
+                            $param_type_string .= "i";
                         break;
 
                         case "string":
-                            $bind_type_string .= "s";
+                            $param_type_string .= "s";
                         break;
 
                         default:
@@ -185,40 +187,33 @@
                     }
 
                     // aggregate all field values in a new array
-                    $bind_param_values[] = $methodValue;
+                    $param_values[] = $methodValue;
                 }
 
                 // We need to append "i" to the bind_param_string and the primary key to the values if we update the row
                 if ($num_rows > 0) {
-                    $bind_type_string .= "i";
-                    $bind_param_values[] = $entity->getId();
+                    $param_type_string .= "i";
+                    $param_values[] = $entity->getId();
                 }
 
                 // first argument for mysqli_stmt->bind_param() is the type string
-                $bind_params[] = $bind_type_string;
+                $param_references[] = $param_type_string;
 
                 /**
                  * mysqli_stmt->bind_param() only accepts references, so we need
                  * to iterate through the value array and reference all values
                  */
-                for ($i = 0, $j = 1; $i < sizeof($bind_param_values); $i++, $j++)
-                    $bind_params[$j] = &$bind_param_values[$i];
+                for ($i = 0, $j = 1; $i < sizeof($param_values); $i++, $j++)
+                    $param_references[$j] = &$param_values[$i];
 
                 // now we prepare the statement, bind all values and finally execute it
                 if ($stmt = $this->prepare($query)) {
-                    call_user_func_array([$stmt, "bind_param"], $bind_params);
+                    call_user_func_array([$stmt, "bind_param"], $param_references);
                     $stmt->execute();
                     $stmt->close();
                 }
                 else
                     die("Error: " . $this->error . "( " . $this->errno . ")");
-
-                // echo "<pre>";
-                // print($query);
-                // print_r($this);
-                // print_r($stmt);
-                // print_r($bind_params);
-                // echo "</pre>";
             }
         }
 
@@ -297,10 +292,158 @@
             return $entity;
         }
 
-        public function getEntities(string $entity_name, string $predicates, ?int $offset, ?int $limit)
+        /**
+         * Returns zero or more entities
+         * 
+         * @param string $entity_name The class name of the entity
+         * @param \Beeltec\ORM\Predicate[] $predicates The predicates for the query
+         * @param int $offset
+         * @param int $limit
+         * @return \Beeltec\ORM\Entity[]
+         */
+        public function getEntities(string $entity_name, array $predicates, ?int $offset = 0, ?int $limit = 10)
         {
+            // Create the array we want to return
+            $entity_array = array();
+
+            // Initialize necessary variables
             $offset = $offset ?? 0;
             $limit = $limit ?? 10;
+
+            // The entity name is always in lowercase
+            $entity_name = strtolower($entity_name);
+
+            // The class name needs the namespace prefix to work and has to be in CamelCase
+            $class_name = "\\Beeltec\\ORM\\Entity\\" . ucwords($entity_name);
+
+            // Create a new object of the corresponsing class
+            $entity = new $class_name();
+
+            // Get all fields of the entity
+            $entity_fields = $entity->getFields();
+
+            // Build the query with wildcards for predicates
+            $query = "SELECT `id`, ";
+            for ($i = 0; $i < sizeof($entity_fields); $i++) {
+                $query .= "`" . $entity_fields[$i] . "`";
+                if ($i < sizeof($entity_fields)-1)
+                    $query .= ", ";
+            }
+            $query .= " FROM `$entity_name` WHERE ";
+
+            // Use sizeof() instead of count() since we do not pre-calculate the amount of elements in the array
+            for ($i = 0; $i < sizeof($predicates); $i++) {
+                $query .= "`" . $predicates[$i]->getKey() . "` " . $predicates[$i]->getComparison() . " ?";
+                if ($i < sizeof($predicates)-1)
+                    $query .= " " . $predicates[$i+1]->getLogic() ." ";
+            }
+
+            // Set offset and limit wildcards
+            $query .= " LIMIT ?, ?";
+
+            // Create the prepared statement
+            if ($stmt = $this->prepare($query)) {
+
+                // Create empty string for the bind_param type string
+                $param_type_string = "";
+
+                // Create array for the bind_param values
+                $param_values = array();
+
+                // Create array that references the bind_param values
+                $param_references = array();
+
+                // Create array for the bind_result values;
+                $result_values = array();
+
+                // Create array for the bind_result references;
+                $result_references = array();
+
+                // Iterate through all predicate values to assess their data types and assign them to the value array
+                for ($i = 0; $i < sizeof($predicates); $i++) {
+
+                    // Get the value of the predicate
+                    $value = $predicates[$i]->getValue();
+
+                    // Get the type of the value
+                    $value_type = gettype($value);
+
+                    // Append the corresponding letter to the type string
+                    switch ($value_type) {
+                        case "integer":
+                            $param_type_string .= "i";
+                        break;
+
+                        case "string":
+                            $param_type_string .= "s";
+                        break;
+
+                        default:
+                        break;
+                    }
+
+                    // Add value to the value array
+                    $param_values[$i] = $value;
+                }
+
+                // Add string types for offset and limit
+                $param_type_string .= "ii";
+
+                // Add values for offset and value
+                $param_values[] = $offset;
+                $param_values[] = $limit;
+
+                // First entry in param reference array needs to be the type string
+                $param_references[] = $param_type_string;
+
+                // Iterate through the value array and add corresponding references to the reference array
+                for ($i = 0; $i < sizeof($param_values); $i++)
+                    $param_references[] = &$param_values[$i];
+
+
+                // Now we call mysqli_stmt->bind_param with our reference array
+                call_user_func_array([$stmt, "bind_param"], $param_references);
+
+                // Execute the statement
+                $stmt->execute();
+
+                // Set the primary key reference for mysqli_stmt->bind_result
+                $result_references[] = &$result_values["id"];
+
+                // Iterate through all fields to create the remaining result references
+                for ($i = 0; $i < sizeof($entity_fields); $i++)
+                    $result_references[] = &$result_values[$entity_fields[$i]];
+
+                // Now we call mysqli_stmt->bind_result with our reference array
+                call_user_func_array([$stmt, "bind_result"], $result_references);
+
+                // We might get multiple rows, so we need to call fetch in a while loop
+                while ($stmt->fetch()) {
+
+                    // Create a new instance of our entity
+                    $entity = new $class_name();
+
+                    // Populate the entity with values from the value array
+                    $entity->setId($result_values["id"]);
+                    for ($i = 0; $i < sizeof($entity_fields); $i++) {
+                        // Build the setter method names
+                        $method_name = "set" . ucwords($entity_fields[$i]);
+
+                        // Set the value
+                        $entity->$method_name($result_values[$entity_fields[$i]]);
+                    }
+                    
+                    // Add the entity to our return array
+                    $entity_array[] = $entity;
+                }
+
+                // Close the statement
+                $stmt->close();
+
+            }
+
+            // Return all entities
+            return $entity_array;
         }
 
         /**
